@@ -36,6 +36,7 @@ DEFINE_GLOBAL_CONFIGVAL( int32, FakePacketReorder_Time, 15, 0, 5000 );
 DEFINE_GLOBAL_CONFIGVAL( float, FakePacketDup_Send, 0.0f, 0.0f, 100.0f );
 DEFINE_GLOBAL_CONFIGVAL( float, FakePacketDup_Recv, 0.0f, 0.0f, 100.0f );
 DEFINE_GLOBAL_CONFIGVAL( int32, FakePacketDup_TimeMax, 10, 0, 5000 );
+DEFINE_GLOBAL_CONFIGVAL( int32, EnumerateDevVars, 0, 0, 1 );
 
 DEFINE_CONNECTON_DEFAULT_CONFIGVAL( int32, TimeoutInitial, 10000, 0, INT32_MAX );
 DEFINE_CONNECTON_DEFAULT_CONFIGVAL( int32, TimeoutConnected, 10000, 0, INT32_MAX );
@@ -172,6 +173,7 @@ void ConnectionConfig::Init( ConnectionConfig *pInherit )
 
 CUtlHashMap<uint16, CSteamNetworkConnectionBase *, std::equal_to<uint16>, Identity<uint16> > g_mapConnections;
 CUtlHashMap<int, CSteamNetworkListenSocketBase *, std::equal_to<int>, Identity<int> > g_mapListenSockets;
+CUtlHashMap<int, CSteamNetworkPollGroup *, std::equal_to<int>, Identity<int> > g_mapPollGroups;
 
 static bool BConnectionStateExistsToAPI( ESteamNetworkingConnectionState eState )
 {
@@ -225,13 +227,35 @@ static CSteamNetworkConnectionBase *GetConnectionByHandleForAPI( HSteamNetConnec
 
 static CSteamNetworkListenSocketBase *GetListenSocketByHandle( HSteamListenSocket sock )
 {
-	if ( sock == 0 )
+	if ( sock == k_HSteamListenSocket_Invalid )
 		return nullptr;
+	AssertMsg( !(sock & 0x80000000), "A poll group handle was used where a listen socket handle was expected" );
 	int idx = sock & 0xffff;
 	if ( !g_mapListenSockets.IsValidIndex( idx ) )
 		return nullptr;
 	CSteamNetworkListenSocketBase *pResult = g_mapListenSockets[ idx ];
-	Assert( pResult && pResult->m_hListenSocketSelf == sock );
+	if ( pResult->m_hListenSocketSelf != sock )
+	{
+		// Slot was reused, but this handle is now invalid
+		return nullptr;
+	}
+	return pResult;
+}
+
+static CSteamNetworkPollGroup *GetPollGroupByHandle( HSteamNetPollGroup hPollGroup )
+{
+	if ( hPollGroup == k_HSteamNetPollGroup_Invalid )
+		return nullptr;
+	AssertMsg( (hPollGroup & 0x80000000), "A listen socket handle was used where a poll group handle was expected" );
+	int idx = hPollGroup & 0xffff;
+	if ( !g_mapPollGroups.IsValidIndex( idx ) )
+		return nullptr;
+	CSteamNetworkPollGroup *pResult = g_mapPollGroups[ idx ];
+	if ( pResult->m_hPollGroupSelf != hPollGroup )
+	{
+		// Slot was reused, but this handle is now invalid
+		return nullptr;
+	}
 	return pResult;
 }
 
@@ -303,6 +327,18 @@ void CSteamNetworkingSockets::KillConnections()
 			Assert( !g_mapListenSockets.IsValidIndex( idx ) );
 		}
 	}
+
+	// Destroy all of my poll groups
+	FOR_EACH_HASHMAP( g_mapPollGroups, idx )
+	{
+		CSteamNetworkPollGroup *pPollGroup = g_mapPollGroups[idx];
+		if ( pPollGroup->m_pSteamNetworkingSocketsInterface == this )
+		{
+			DbgVerify( DestroyPollGroup( pPollGroup->m_hPollGroupSelf ) );
+			Assert( !g_mapPollGroups.IsValidIndex( idx ) );
+		}
+	}
+
 }
 
 void CSteamNetworkingSockets::Destroy()
@@ -357,9 +393,6 @@ bool CSteamNetworkingSockets::GetIdentity( SteamNetworkingIdentity *pIdentity )
 		*pIdentity = m_identity;
 	return !m_identity.IsInvalid();
 }
-
-/// Certificate provision by the application.  (On Steam, Steam will handle all this automatically)
-#ifndef STEAMNETWORKINGSOCKETS_STEAM
 
 bool CSteamNetworkingSockets::GetCertificateRequest( int *pcbBlob, void *pBlob, SteamNetworkingErrMsg &errMsg )
 {
@@ -525,8 +558,6 @@ bool CSteamNetworkingSockets::SetCertificate( const void *pCertificate, int cbCe
 	// OK
 	return true;
 }
-
-#endif
 
 #ifdef STEAMNETWORKINGSOCKETS_OPENSOURCE
 ESteamNetworkingAvailability CSteamNetworkingSockets::InitAuthentication()
@@ -735,14 +766,67 @@ int CSteamNetworkingSockets::ReceiveMessagesOnConnection( HSteamNetConnection hC
 	return pConn->APIReceiveMessages( ppOutMessages, nMaxMessages );
 }
 
-int CSteamNetworkingSockets::ReceiveMessagesOnListenSocket( HSteamListenSocket hSocket, SteamNetworkingMessage_t **ppOutMessages, int nMaxMessages )
+HSteamNetPollGroup CSteamNetworkingSockets::CreatePollGroup()
+{
+	SteamDatagramTransportLock scopeLock( "CreatePollGroup" );
+	CSteamNetworkPollGroup *pPollGroup = new CSteamNetworkPollGroup( this );
+	pPollGroup->AssignHandleAndAddToGlobalTable();
+	return pPollGroup->m_hPollGroupSelf;
+}
+
+bool CSteamNetworkingSockets::DestroyPollGroup( HSteamNetPollGroup hPollGroup )
+{
+	SteamDatagramTransportLock scopeLock( "DestroyPollGroup" );
+	CSteamNetworkPollGroup *pPollGroup = GetPollGroupByHandle( hPollGroup );
+	if ( !pPollGroup )
+		return false;
+	delete pPollGroup;
+	return true;
+}
+
+bool CSteamNetworkingSockets::SetConnectionPollGroup( HSteamNetConnection hConn, HSteamNetPollGroup hPollGroup )
+{
+	SteamDatagramTransportLock scopeLock( "SetConnectionPollGroup" );
+	CSteamNetworkConnectionBase *pConn = GetConnectionByHandleForAPI( hConn );
+	if ( !pConn )
+		return false;
+
+	// Special case for removing the poll group
+	if ( hPollGroup == k_HSteamNetPollGroup_Invalid )
+	{
+		pConn->RemoveFromPollGroup();
+		return true;
+	}
+
+
+	CSteamNetworkPollGroup *pPollGroup = GetPollGroupByHandle( hPollGroup );
+	if ( !pPollGroup )
+		return false;
+
+	pConn->SetPollGroup( pPollGroup );
+
+	return true;
+}
+
+int CSteamNetworkingSockets::ReceiveMessagesOnPollGroup( HSteamNetPollGroup hPollGroup, SteamNetworkingMessage_t **ppOutMessages, int nMaxMessages )
+{
+	SteamDatagramTransportLock scopeLock( "ReceiveMessagesOnPollGroup" );
+	CSteamNetworkPollGroup *pPollGroup = GetPollGroupByHandle( hPollGroup );
+	if ( !pPollGroup )
+		return -1;
+	return pPollGroup->m_queueRecvMessages.RemoveMessages( ppOutMessages, nMaxMessages );
+}
+
+#ifdef STEAMNETWORKINGSOCKETS_STEAMCLIENT
+int CSteamNetworkingSockets::ReceiveMessagesOnListenSocketLegacyPollGroup( HSteamListenSocket hSocket, SteamNetworkingMessage_t **ppOutMessages, int nMaxMessages )
 {
 	SteamDatagramTransportLock scopeLock( "ReceiveMessagesOnListenSocket" );
 	CSteamNetworkListenSocketBase *pSock = GetListenSocketByHandle( hSocket );
 	if ( !pSock )
 		return -1;
-	return pSock->APIReceiveMessages( ppOutMessages, nMaxMessages );
+	return pSock->m_legacyPollGroup.m_queueRecvMessages.RemoveMessages( ppOutMessages, nMaxMessages );
 }
+#endif
 
 bool CSteamNetworkingSockets::GetConnectionInfo( HSteamNetConnection hConn, SteamNetConnectionInfo_t *pInfo )
 {
@@ -1409,6 +1493,20 @@ ESteamNetworkingGetConfigValueResult CSteamNetworkingUtils::GetConfigValue(
 	return k_ESteamNetworkingGetConfigValue_BadValue;
 }
 
+bool IsDevConfigValue( ESteamNetworkingConfigValue eVal )
+{
+	switch  ( eVal )
+	{
+		case k_ESteamNetworkingConfig_IP_AllowWithoutAuth:
+		case k_ESteamNetworkingConfig_Unencrypted:
+		case k_ESteamNetworkingConfig_EnumerateDevVars:
+		case k_ESteamNetworkingConfig_SDRClient_FakeClusterPing:
+			return true;
+	}
+
+	return false;
+}
+
 bool CSteamNetworkingUtils::GetConfigValueInfo( ESteamNetworkingConfigValue eValue,
 	const char **pOutName, ESteamNetworkingConfigDataType *pOutDataType,
 	ESteamNetworkingConfigScope *pOutScope, ESteamNetworkingConfigValue *pOutNextValue )
@@ -1426,10 +1524,21 @@ bool CSteamNetworkingUtils::GetConfigValueInfo( ESteamNetworkingConfigValue eVal
 
 	if ( pOutNextValue )
 	{
-		if ( pVal->m_pNextEntry )
-			*pOutNextValue = pVal->m_pNextEntry->m_eValue;
-		else
-			*pOutNextValue = k_ESteamNetworkingConfig_Invalid;
+		const GlobalConfigValueEntry *pNext = pVal;
+		for (;;)
+		{
+			pNext = pNext->m_pNextEntry;
+			if ( !pNext )
+			{
+				*pOutNextValue = k_ESteamNetworkingConfig_Invalid;
+				break;
+			}
+			if ( g_Config_EnumerateDevVars.Get() || !IsDevConfigValue( pNext->m_eValue ) )
+			{
+				*pOutNextValue = pNext->m_eValue;
+				break;
+			}
+		};
 	}
 
 	return true;
@@ -1438,6 +1547,7 @@ bool CSteamNetworkingUtils::GetConfigValueInfo( ESteamNetworkingConfigValue eVal
 ESteamNetworkingConfigValue CSteamNetworkingUtils::GetFirstConfigValue()
 {
 	EnsureConfigValueTableInitted();
+	Assert( !IsDevConfigValue( s_vecConfigValueTable[0]->m_eValue ) );
 	return s_vecConfigValueTable[0]->m_eValue;
 }
 

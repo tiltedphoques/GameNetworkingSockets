@@ -67,9 +67,16 @@ struct SteamRelayNetworkStatus_t;
 typedef uint32 HSteamNetConnection;
 const HSteamNetConnection k_HSteamNetConnection_Invalid = 0;
 
-/// Handle used to identify a "listen socket".
+/// Handle used to identify a "listen socket".  Unlike traditional
+/// Berkeley sockets, a listen socket and a connection are two
+/// different abstractions.
 typedef uint32 HSteamListenSocket;
 const HSteamListenSocket k_HSteamListenSocket_Invalid = 0;
+
+/// Handle used to identify a poll group, used to query many
+/// connections at once efficiently.
+typedef uint32 HSteamNetPollGroup;
+const HSteamNetPollGroup k_HSteamNetPollGroup_Invalid = 0;
 
 /// Max length of diagnostic error message
 const int k_cchMaxSteamNetworkingErrMsg = 1024;
@@ -86,7 +93,7 @@ typedef uint32 SteamNetworkingPOPID;
 /// microseconds.  This is guaranteed to increase over time during the lifetime
 /// of a process, but not globally across runs.  You don't need to worry about
 /// the value wrapping around.  Note that the underlying clock might not actually have
-/// microsecond *resolution*.
+/// microsecond resolution.
 typedef int64 SteamNetworkingMicroseconds;
 
 /// Describe the status of a particular network resource
@@ -1026,6 +1033,9 @@ enum ESteamNetworkingConfigValue
 	/// we don't know our identity or can't get a cert.  On the server, it means that
 	/// we won't automatically reject a connection due to a failure to authenticate.
 	/// (You can examine the incoming connection and decide whether to accept it.)
+	///
+	/// This is a dev configuration value, and you should not let users modify it in
+	/// production.
 	k_ESteamNetworkingConfig_IP_AllowWithoutAuth = 23,
 
 	/// [connection int32] Do not send UDP packets with a payload of
@@ -1042,7 +1052,24 @@ enum ESteamNetworkingConfigValue
 	/// 1: Allowed, but prefer encrypted
 	/// 2: Allowed, and preferred
 	/// 3: Required.  (Fail the connection if the peer requires encryption.)
+	///
+	/// This is a dev configuration value, since its purpose is to disable encryption.
+	/// You should not let users modify it in production.  (But note that it requires
+	/// the peer to also modify their value in order for encryption to be disabled.)
 	k_ESteamNetworkingConfig_Unencrypted = 34,
+
+	/// [global int32] 0 or 1.  Some variables are "dev" variables.  They are useful
+	/// for debugging, but should not be adjusted in production.  When this flag is false (the default),
+	/// such variables will not be enumerated by the ISteamnetworkingUtils::GetFirstConfigValue
+	/// ISteamNetworkingUtils::GetConfigValueInfo functions.  The idea here is that you
+	/// can use those functions to provide a generic mechanism to set any configuration
+	/// value from a console or configuration file, looking up the variable by name.  Depending
+	/// on your game, modifying other configuration values may also have negative effects, and
+	/// you may wish to further lock down which variables are allowed to be modified by the user.
+	/// (Maybe no variables!)  Or maybe you use a whitelist or blacklist approach.
+	///
+	/// (This flag is itself a dev variable.)
+	k_ESteamNetworkingConfig_EnumerateDevVars = 35,
 
 	//
 	// Settings for SDR relayed connections
@@ -1085,6 +1112,13 @@ enum ESteamNetworkingConfigValue
 	/// [global string] For debugging.  Override list of relays from the config with
 	/// this set (maybe just one).  Comma-separated list.
 	k_ESteamNetworkingConfig_SDRClient_ForceProxyAddr = 31,
+
+	/// [global string] For debugging.  Force ping times to clusters to be the specified
+	/// values.  A comma separated list of <cluster>=<ms> values.  E.g. "sto=32,iad=100"
+	///
+	/// This is a dev configuration value, you probably should not let users modify it
+	/// in production.
+	k_ESteamNetworkingConfig_SDRClient_FakeClusterPing = 36,
 
 	//
 	// Log levels for debuging information.  A higher priority
