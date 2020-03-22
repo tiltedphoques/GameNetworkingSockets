@@ -1,5 +1,6 @@
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <stdarg.h>
 #include <string.h>
 #include <string>
@@ -64,6 +65,13 @@ static void Printf( const char *fmt, ... )
 
 static void InitSteamDatagramConnectionSockets()
 {
+	g_fpLog = fopen( "log.txt", "wt" );
+	g_logTimeZero = SteamNetworkingUtils()->GetLocalTimestamp();
+
+	SteamNetworkingUtils()->SetDebugOutputFunction( k_ESteamNetworkingSocketsDebugOutputType_Debug, DebugOutput );
+	//SteamNetworkingUtils()->SetDebugOutputFunction( k_ESteamNetworkingSocketsDebugOutputType_Verbose, DebugOutput );
+	//SteamNetworkingUtils()->SetDebugOutputFunction( k_ESteamNetworkingSocketsDebugOutputType_Msg, DebugOutput );
+
 	#ifdef STEAMNETWORKINGSOCKETS_OPENSOURCE
 		SteamDatagramErrMsg errMsg;
 		if ( !GameNetworkingSockets_Init( nullptr, errMsg ) )
@@ -84,13 +92,6 @@ static void InitSteamDatagramConnectionSockets()
 			exit(1);
 		}
 	#endif
-
-	g_fpLog = fopen( "log.txt", "wt" );
-	g_logTimeZero = SteamNetworkingUtils()->GetLocalTimestamp();
-
-	SteamNetworkingUtils()->SetDebugOutputFunction( k_ESteamNetworkingSocketsDebugOutputType_Debug, DebugOutput );
-	//SteamNetworkingUtils()->SetDebugOutputFunction( k_ESteamNetworkingSocketsDebugOutputType_Verbose, DebugOutput );
-	//SteamNetworkingUtils()->SetDebugOutputFunction( k_ESteamNetworkingSocketsDebugOutputType_Msg, DebugOutput );
 }
 
 static void ShutdownSteamDatagramConnectionSockets()
@@ -189,6 +190,7 @@ struct SFakePeer
 				 (long long)msg.m_nMsgNum, 
 				 msg.m_cbSize,
 				 GetQueuedSendBytes() );
+			abort();
 		}
 	#if 0
 		else
@@ -422,7 +424,7 @@ static void TestNetworkConditions( int rate, float loss, int lag, float reorderP
 #if defined(SANITIZER) || defined(LIGHT_TESTS)
 	const SteamNetworkingMicroseconds usecQuietDuration = 5000000;
 	const SteamNetworkingMicroseconds usecActiveDuration = 5000000;
-	int nIterations = 2;
+	int nIterations = 1;
 #else
 	const SteamNetworkingMicroseconds usecQuietDuration = 10000000;
 	const SteamNetworkingMicroseconds usecActiveDuration = 25000000;
@@ -565,10 +567,10 @@ static void RunSteamDatagramConnectionTest()
 	};
 
 	Test( 64000, 20, 100, 4, 50 ); // low bandwidth, terrible packet loss
+#ifndef LIGHT_TESTS
 	Test( 1000000, 20, 100, 4, 10 ); // high bandwidth, terrible packet loss
 	Test( 1000000, 2, 5, 2, 1 ); // wifi (high bandwideth, low packet loss, occasional reordering with very small delay)
 	Test( 2000000, 0, 0, 0, 0 ); // LAN (high bandwidth, negligible lag/loss)
-#ifndef LIGHT_TESTS
 	Test( 128000, 20, 100, 4, 40 );
 	Test( 500000, 20, 100, 4, 30 );
 

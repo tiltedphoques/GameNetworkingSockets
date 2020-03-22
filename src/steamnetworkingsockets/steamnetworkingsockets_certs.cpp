@@ -1,6 +1,7 @@
 //====== Copyright Valve Corporation, All rights reserved. ====================
 
 #include <crypto.h>
+#include <crypto_25519.h>
 #include "steamnetworkingsockets_internal.h"
 
 // Must be the last include
@@ -93,7 +94,7 @@ bool BSteamNetworkingIdentityFromLegacyBinaryProtobuf( SteamNetworkingIdentity &
 	{
 		V_sprintf_safe( errMsg, "Unrecognized identity format.  (%d unknown field(s), first ID=%d)", msgIdentity.unknown_fields().field_count(), msgIdentity.unknown_fields().field(0).number() );
 	}
-	else if ( msgIdentity.ByteSize() == 0 )
+	else if ( ProtoMsgByteSize( msgIdentity ) == 0 )
 	{
 		V_strcpy_safe( errMsg, "Empty identity msg" );
 	}
@@ -224,7 +225,7 @@ bool BSteamNetworkingIdentityToProtobufInternal( const SteamNetworkingIdentity &
 
 	// And return string format
 	char buf[ SteamNetworkingIdentity::k_cchMaxString ];
-	SteamAPI_SteamNetworkingIdentity_ToString( identity, buf, sizeof(buf) );
+	SteamAPI_SteamNetworkingIdentity_ToString( &identity, buf, sizeof(buf) );
 	*strIdentity = buf;
 
 	return true;

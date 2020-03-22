@@ -32,7 +32,7 @@
 // If available use static_assert instead of weird language tricks. This
 // leads to much more readable messages when compile time assert constraints
 // are violated.
-#if !defined(OSX) && (_MSC_VER > 1500 || __GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 5) || defined(__clang__) )
+#if (_MSC_VER > 1500 || __GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 5) || defined(__clang__) )
 	#define PLAT_COMPILE_TIME_ASSERT( pred ) static_assert( pred, "Compile time assert constraint is not true: " #pred )
 #else
 	#define PLAT_COMPILE_TIME_ASSERT( pred ) typedef int UNIQUE_ID[ (pred) ? 1 : -1]
@@ -95,26 +95,26 @@
 
 // Used to step into the debugger
 #ifdef _WIN64
-	#define DebuggerBreak()  __debugbreak()
-#elif defined(_WIN32)
-	#define DebuggerBreak()  __asm { int 3 }
+	#define DebuggerBreak()  do { __debugbreak(); } while(0)
 #elif defined( COMPILER_GCC )
 	#if defined( _PS3 )
 		#if defined( _CERT )
 			#define DebuggerBreak() ((void)0)
 		#else
-			#define DebuggerBreak() {  __asm volatile ("tw 31,1,1"); }
+			#define DebuggerBreak() do {  __asm volatile ("tw 31,1,1"); } while(0)
 		#endif
 	#elif defined(__i386__) || defined(__x86_64__)
-		#define DebuggerBreak()  __asm__ __volatile__ ( "int $3" );
+		#define DebuggerBreak()  do { __asm__ __volatile__ ( "int $3" ); } while(0)
 	#else
-		#define DebuggerBreak()
+		#define DebuggerBreak() do { } while(0)
 	#endif
+#elif defined(_WIN32)
+	#define DebuggerBreak()  do { __asm { int 3 }; } while(0)
 #elif defined( COMPILER_SNC ) && defined( COMPILER_PS3 )
 	static volatile bool sPS3_SuppressAssertsInThisFile = false; // you can throw this in the debugger to temporarily disable asserts inside any particular .cpp module.
 	#define DebuggerBreak() if (!sPS3_SuppressAssertsInThisFile) __builtin_snpause(); // <sergiy> from SNC Migration Guide, tw 31,1,1
 #else
-	#define DebuggerBreak()  __asm__ __volatile__ ( "int $3" );
+	#define DebuggerBreak()  do { __asm__ __volatile__ ( "int $3" ); } while(0)
 #endif
 
 #if defined(_WIN64)
@@ -125,13 +125,6 @@ extern "C"
 }
 #pragma intrinsic(__rdtsc)
 #define PLAT_CPU_TIME() __rdtsc()
-
-#elif defined(_WIN32)
-
-FORCEINLINE unsigned __int64 PLAT_CPU_TIME()
-{
-    __asm rdtsc
-}
 
 #elif defined(COMPILER_GCC) && ( defined(__i386__) || defined(__x86_64__) )
 
@@ -147,6 +140,14 @@ inline __attribute__ ((always_inline)) unsigned long long PLAT_CPU_TIME()
     return Val;
 #endif
 }
+
+#elif defined(_WIN32)
+
+FORCEINLINE unsigned __int64 PLAT_CPU_TIME()
+{
+    __asm rdtsc
+}
+
 
 #elif defined(POSIX)
 

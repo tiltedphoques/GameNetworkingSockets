@@ -181,6 +181,7 @@ static bool BConnectionStateExistsToAPI( ESteamNetworkingConnectionState eState 
 	{
 		default:
 			Assert( false );
+			return false;
 		case k_ESteamNetworkingConnectionState_None:
 		case k_ESteamNetworkingConnectionState_Dead:
 		case k_ESteamNetworkingConnectionState_FinWait:
@@ -425,7 +426,7 @@ bool CSteamNetworkingSockets::GetCertificateRequest( int *pcbBlob, void *pBlob, 
 	}
 
 	// Check size
-	int cb = msgRequest.ByteSize();
+	int cb = ProtoMsgByteSize( msgRequest );
 	if ( !pBlob )
 	{
 		*pcbBlob = cb;
@@ -590,7 +591,7 @@ HSteamListenSocket CSteamNetworkingSockets::CreateListenSocketIP( const SteamNet
 	if ( !pSock->BInit( localAddr, nOptions, pOptions, errMsg ) )
 	{
 		SpewError( "Cannot create listen socket.  %s", errMsg );
-		delete pSock;
+		pSock->Destroy();
 		return k_HSteamListenSocket_Invalid;
 	}
 
@@ -1564,7 +1565,7 @@ bool CSteamNetworkingUtils::SteamNetworkingIPAddr_ParseString( SteamNetworkingIP
 
 void CSteamNetworkingUtils::SteamNetworkingIdentity_ToString( const SteamNetworkingIdentity &identity, char *buf, size_t cbBuf )
 {
-	return SteamAPI_SteamNetworkingIdentity_ToString( identity, buf, cbBuf );
+	return SteamAPI_SteamNetworkingIdentity_ToString( &identity, buf, cbBuf );
 }
 
 bool CSteamNetworkingUtils::SteamNetworkingIdentity_ParseString( SteamNetworkingIdentity *pIdentity, const char *pszStr )
